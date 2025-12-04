@@ -37,26 +37,34 @@
 ///
 /// ## Authentication
 ///
-/// To use this package, you need an EA OAuth access token. You can obtain one using:
+/// EA's OAuth system has strict redirect URI requirements that make automated
+/// web-based authentication from native apps challenging. To get a token:
 ///
-/// 1. The built-in ``EAAuthenticator`` class
-/// 2. Intercepting tokens from the EA App/Origin client
-/// 3. Implementing your own OAuth flow
+/// 1. **From the EA App (Windows)**: Use a network inspector to capture the access token
+/// 2. **From Browser Dev Tools**: Login to ea.com, open dev tools, look for requests
+///    to gateway.ea.com and copy the Authorization header (remove "Bearer " prefix)
+/// 3. **From Game Auth**: Some EA games expose their auth tokens that can be reused
+///
+/// Once you have a token, validate and store it:
 ///
 /// ```swift
 /// let authenticator = EAAuthenticator()
-/// let token = try await authenticator.authenticate(anchor: window)
-/// let api = EAIdentityAPI(accessToken: token)
+/// try await authenticator.validateAndStore(token: "your_token_here")
+///
+/// // Later, use the stored token
+/// if let token = authenticator.getStoredToken() {
+///     let api = EAIdentityAPI(accessToken: token)
+/// }
 /// ```
 ///
-/// ## Token Storage
+/// ## Using EAClient (Recommended)
 ///
-/// Use ``EATokenStorage`` to securely store tokens in the Keychain:
+/// For simpler usage, use ``EAClient`` which handles token storage:
 ///
 /// ```swift
-/// let storage = EATokenStorage()
-/// try storage.saveToken(token)
-/// let savedToken = storage.loadToken()
+/// let client = EAClient()
+/// try await client.setToken("your_token_here")
+/// let identity = try await client.getIdentity()
 /// ```
 ///
 /// ## Terminology
@@ -74,6 +82,7 @@
 ///
 /// ### Essentials
 /// - ``EAIdentityAPI``
+/// - ``EAClient``
 /// - ``EAIdentity``
 /// - ``EAIdentityError``
 ///
@@ -85,9 +94,6 @@
 /// - ``PIDInfo``
 /// - ``PersonaInfo``
 /// - ``TokenInfo``
-///
-/// ### SwiftUI Integration
-/// - ``EAIdentityViewModel``
 
 // Re-export all public types
 @_exported import Foundation

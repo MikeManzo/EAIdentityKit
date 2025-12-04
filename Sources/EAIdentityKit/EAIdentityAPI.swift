@@ -28,22 +28,12 @@ import UIKit
 /// let identity = try await api.getFullIdentity()
 /// ```
 ///
-/// ## Usage with Automatic Authentication
+/// ## Usage with Cached Token
 ///
 /// ```swift
-/// // Creates an API that will automatically authenticate when needed
-/// let api = try await EAIdentityAPI.authenticated()
-/// let identity = try await api.getFullIdentity()
-/// ```
-///
-/// ## Usage with Credentials
-///
-/// ```swift
-/// let api = try await EAIdentityAPI.authenticated(
-///     email: "user@example.com",
-///     password: "password"
-/// )
-/// let identity = try await api.getFullIdentity()
+/// if let api = EAIdentityAPI.fromCache() {
+///     let identity = try await api.getFullIdentity()
+/// }
 /// ```
 public final class EAIdentityAPI: @unchecked Sendable {
     
@@ -119,74 +109,13 @@ public final class EAIdentityAPI: @unchecked Sendable {
         self.init(accessToken: accessToken, session: session)
     }
     
-    // MARK: - Factory Methods (Automatic Authentication)
-    
-    #if os(macOS)
-    /// Create an authenticated API instance using web-based OAuth flow (macOS)
-    ///
-    /// This will present a login window if no valid cached token exists.
-    ///
-    /// - Parameters:
-    ///   - window: Window to present login from (uses key window if nil)
-    ///   - clientId: EA OAuth client ID
-    /// - Returns: Authenticated EAIdentityAPI instance
-    @MainActor
-    public static func authenticated(
-        window: NSWindow? = nil,
-        clientId: EAAuthenticator.ClientID = .default
-    ) async throws -> EAIdentityAPI {
-        let auth = EAAuthenticator(clientId: clientId)
-        let token = try await auth.authenticate(window: window)
-        return EAIdentityAPI(accessToken: token)
-    }
-    #endif
-    
-    #if os(iOS)
-    /// Create an authenticated API instance using web-based OAuth flow (iOS)
-    ///
-    /// This will present a login view if no valid cached token exists.
-    ///
-    /// - Parameters:
-    ///   - viewController: View controller to present login from
-    ///   - clientId: EA OAuth client ID
-    /// - Returns: Authenticated EAIdentityAPI instance
-    @MainActor
-    public static func authenticated(
-        from viewController: UIViewController,
-        clientId: EAAuthenticator.ClientID = .default
-    ) async throws -> EAIdentityAPI {
-        let auth = EAAuthenticator(clientId: clientId)
-        let token = try await auth.authenticate(from: viewController)
-        return EAIdentityAPI(accessToken: token)
-    }
-    #endif
-    
-    /// Create an authenticated API instance using email and password
-    ///
-    /// Note: This may fail if CAPTCHA or 2FA is required. Use web-based authentication
-    /// for better reliability.
-    ///
-    /// - Parameters:
-    ///   - email: EA account email
-    ///   - password: EA account password
-    ///   - clientId: EA OAuth client ID
-    /// - Returns: Authenticated EAIdentityAPI instance
-    public static func authenticated(
-        email: String,
-        password: String,
-        clientId: EAAuthenticator.ClientID = .default
-    ) async throws -> EAIdentityAPI {
-        let auth = await EAAuthenticator(clientId: clientId)
-        let token = try await auth.authenticate(email: email, password: password)
-        return EAIdentityAPI(accessToken: token)
-    }
+    // MARK: - Factory Methods
     
     /// Create an API instance using a cached token if available
     ///
     /// Returns nil if no valid cached token exists.
     ///
-    /// - Parameters:
-    ///   - storage: Token storage to check
+    /// - Parameter storage: Token storage to check
     /// - Returns: EAIdentityAPI instance if cached token exists, nil otherwise
     public static func fromCache(
         storage: EATokenStorage = EATokenStorage()
@@ -198,31 +127,16 @@ public final class EAIdentityAPI: @unchecked Sendable {
         return EAIdentityAPI(accessToken: credentials.accessToken)
     }
     
-    /// Create an API instance, using cached token or authenticating as needed
+    /// Create an API instance from the EAAuthenticator's stored token
     ///
-    /// This method:
-    /// 1. Checks for a valid cached token
-    /// 2. Tries to refresh an expired token
-    /// 3. Falls back to web authentication if needed
+    /// Returns nil if no valid token is stored.
     ///
-    /// - Parameters:
-    ///   - anchor: Presentation anchor for web authentication
-    ///   - clientId: EA OAuth client ID
-    /// - Returns: Authenticated EAIdentityAPI instance
-    public static func authenticatedOrCached(
-        anchor: ASPresentationAnchor,
-        clientId: EAAuthenticator.ClientID = .default
-    ) async throws -> EAIdentityAPI {
-        let storage = EATokenStorage()
-        let auth = await EAAuthenticator(clientId: clientId, storage: storage)
-        
-        // Try cached token first
-        if let credentials = storage.loadCredentials(), !credentials.isExpired {
-            return EAIdentityAPI(accessToken: credentials.accessToken)
+    /// - Parameter authenticator: The authenticator to get the token from
+    /// - Returns: EAIdentityAPI instance if token exists, nil otherwise
+    public static func fromAuthenticator(_ authenticator: EAAuthenticator) -> EAIdentityAPI? {
+        guard let token = authenticator.getStoredToken() else {
+            return nil
         }
-        
-        // Need to authenticate
-        let token = try await auth.authenticateWithWeb(anchor: anchor)
         return EAIdentityAPI(accessToken: token)
     }
     
@@ -322,7 +236,7 @@ public final class EAIdentityAPI: @unchecked Sendable {
                 }
                 
                 // Handle single persona object
-                if json["personaId"] != nil {
+                if let personaId = json["personaId"] {
                     return try parsePersonaJSON(json, userId: pidId)
                 }
             }

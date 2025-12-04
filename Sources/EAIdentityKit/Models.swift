@@ -158,21 +158,6 @@ public struct EAIdentity: Sendable, Equatable {
     }
 }
 
-// MARK: - Token Info Model
-
-/// Information about an EA OAuth token
-public struct TokenInfo: Codable, Sendable {
-    public let clientId: String?
-    public let scope: String?
-    public let expiresIn: Int?
-    
-    enum CodingKeys: String, CodingKey {
-        case clientId = "client_id"
-        case scope
-        case expiresIn = "expires_in"
-    }
-}
-
 // MARK: - Subscription Models
 
 /// EA Play / Origin Access subscription information

@@ -2,31 +2,25 @@
 //  EAClient.swift
 //  EAIdentityKit
 //
-//  High-level client that combines authentication and identity fetching
+//  High-level client that combines token management and identity fetching
 //
 
 import Foundation
-import AuthenticationServices
 
-/// A high-level client that handles authentication and identity fetching
-///
-/// This is the recommended entry point for most use cases. It automatically
-/// handles token management, caching, and refresh.
+/// A high-level client that handles token management and identity fetching
 ///
 /// ## Usage
 ///
 /// ```swift
 /// let client = EAClient()
 ///
-/// // Authenticate and get identity in one call
+/// // Set token obtained from EA App or browser
+/// try await client.setToken("your_access_token_here")
+///
+/// // Get identity
 /// let identity = try await client.getIdentity()
 /// print("EA ID: \(identity.eaId)")
 /// print("Nucleus ID: \(identity.pidId)")
-///
-/// // Or authenticate first, then make multiple calls
-/// try await client.authenticate()
-/// let nucleusId = try await client.getNucleusId()
-/// let personaId = try await client.getPersonaId()
 /// ```
 @available(macOS 10.15, iOS 13.0, *)
 public final class EAClient: @unchecked Sendable {
@@ -39,61 +33,68 @@ public final class EAClient: @unchecked Sendable {
     
     /// Whether the client has a valid authentication token
     public var isAuthenticated: Bool {
-        authenticator.isAuthenticated
+        authenticator.hasValidToken
+    }
+    
+    /// The current access token, if available
+    public var currentToken: String? {
+        authenticator.getStoredToken()
     }
     
     // MARK: - Initialization
     
     /// Initialize the EA client
-    /// - Parameter clientId: The OAuth client ID to use
-    public init(clientId: EAAuthenticator.ClientID = .default) {
+    public init() {
         self.storage = EATokenStorage()
-        self.authenticator = EAAuthenticator(clientId: clientId, storage: storage)
+        self.authenticator = EAAuthenticator(storage: storage)
         
         // Initialize API with cached token if available
-        if let credentials = storage.loadCredentials(), !credentials.isExpired {
-            self.api = EAIdentityAPI(accessToken: credentials.accessToken)
+        if let token = authenticator.getStoredToken() {
+            self.api = EAIdentityAPI(accessToken: token)
         }
     }
     
-    // MARK: - Authentication
-    
-    #if os(macOS)
-    /// Authenticate with EA (macOS)
-    /// - Parameter window: The window to present auth UI from (optional)
-    /// - Returns: The access token
-    @MainActor
-    @discardableResult
-    public func authenticate(window: NSWindow? = nil) async throws -> String {
-        let token = try await authenticator.authenticate(window: window)
+    /// Initialize with a token
+    /// - Parameter token: The EA access token
+    public init(token: String) {
+        self.storage = EATokenStorage()
+        self.authenticator = EAAuthenticator(storage: storage)
         self.api = EAIdentityAPI(accessToken: token)
-        return token
+        
+        // Store the token
+        try? authenticator.storeToken(token)
     }
-    #endif
     
-    #if os(iOS)
-    /// Authenticate with EA (iOS)
-    /// - Parameter viewController: The view controller to present from
-    /// - Returns: The access token
-    @MainActor
+    // MARK: - Token Management
+    
+    /// Set the access token (validates and stores it)
+    /// - Parameter token: The EA access token
+    /// - Returns: True if the token is valid
     @discardableResult
-    public func authenticate(from viewController: UIViewController) async throws -> String {
-        let token = try await authenticator.authenticate(from: viewController)
-        self.api = EAIdentityAPI(accessToken: token)
-        return token
+    public func setToken(_ token: String) async throws -> Bool {
+        let isValid = try await authenticator.validateAndStore(token: token)
+        if isValid {
+            self.api = EAIdentityAPI(accessToken: token)
+        }
+        return isValid
     }
-    #endif
     
-    /// Authenticate with EA using email and password
+    /// Set the access token without validation
     /// - Parameters:
-    ///   - email: EA account email
-    ///   - password: EA account password
-    /// - Returns: The access token
-    @discardableResult
-    public func authenticate(email: String, password: String) async throws -> String {
-        let token = try await authenticator.authenticate(email: email, password: password)
+    ///   - token: The EA access token
+    ///   - expiresIn: Seconds until expiration (default 1 hour)
+    public func setTokenWithoutValidation(_ token: String, expiresIn: Int = 3600) throws {
+        try authenticator.storeToken(token, expiresIn: expiresIn)
         self.api = EAIdentityAPI(accessToken: token)
-        return token
+    }
+    
+    /// Test if the current token works
+    /// - Returns: True if the token is valid
+    public func testCurrentToken() async throws -> Bool {
+        guard let token = currentToken else {
+            return false
+        }
+        return try await authenticator.testToken(token)
     }
     
     /// Logout and clear stored credentials
@@ -104,101 +105,58 @@ public final class EAClient: @unchecked Sendable {
     
     // MARK: - Identity Methods
     
-    /// Get the full EA identity, authenticating if necessary
-    ///
-    /// This method will:
-    /// 1. Check for a cached valid token
-    /// 2. If no valid token, prompt for authentication
-    /// 3. Fetch and return the identity
-    ///
-    /// - Parameter anchor: Presentation anchor for auth UI (macOS/iOS)
+    /// Get the full EA identity
     /// - Returns: The user's EA identity
-    public func getIdentity(anchor: ASPresentationAnchor? = nil) async throws -> EAIdentity {
-        let api = try await ensureAuthenticated(anchor: anchor)
+    /// - Throws: EAAuthError.noToken if no token is set
+    public func getIdentity() async throws -> EAIdentity {
+        let api = try ensureAPI()
         return try await api.getFullIdentity()
     }
     
     /// Get only the nucleus ID (pidId)
-    /// - Parameter anchor: Presentation anchor for auth UI
     /// - Returns: The nucleus ID
-    public func getNucleusId(anchor: ASPresentationAnchor? = nil) async throws -> String {
-        let api = try await ensureAuthenticated(anchor: anchor)
+    public func getNucleusId() async throws -> String {
+        let api = try ensureAPI()
         return try await api.getNucleusId()
     }
     
     /// Get only the persona ID
-    /// - Parameter anchor: Presentation anchor for auth UI
     /// - Returns: The persona ID
-    public func getPersonaId(anchor: ASPresentationAnchor? = nil) async throws -> String {
-        let api = try await ensureAuthenticated(anchor: anchor)
+    public func getPersonaId() async throws -> String {
+        let api = try ensureAPI()
         let pidInfo = try await api.getPIDInfo()
         let personaInfo = try await api.getPersonaInfo(pidId: pidInfo.pidId)
         return personaInfo.personaId
     }
     
     /// Get only the EA ID (public username)
-    /// - Parameter anchor: Presentation anchor for auth UI
     /// - Returns: The EA ID
-    public func getEAId(anchor: ASPresentationAnchor? = nil) async throws -> String {
-        let api = try await ensureAuthenticated(anchor: anchor)
+    public func getEAId() async throws -> String {
+        let api = try ensureAPI()
         let identity = try await api.getFullIdentity()
         return identity.eaId
     }
     
     /// Get detailed PID information
-    /// - Parameter anchor: Presentation anchor for auth UI
     /// - Returns: Detailed PID info
-    public func getPIDInfo(anchor: ASPresentationAnchor? = nil) async throws -> PIDInfo {
-        let api = try await ensureAuthenticated(anchor: anchor)
+    public func getPIDInfo() async throws -> PIDInfo {
+        let api = try ensureAPI()
         return try await api.getPIDInfo()
     }
     
     // MARK: - Private Methods
     
-    private func ensureAuthenticated(anchor: ASPresentationAnchor?) async throws -> EAIdentityAPI {
-        // If we have a valid API instance, use it
-        if let api = self.api {
-            // Verify token is still valid
-            do {
-                let _ = try await authenticator.getValidToken()
-                return api
-            } catch {
-                // Token expired, need to re-authenticate
+    private func ensureAPI() throws -> EAIdentityAPI {
+        // Check for stored token first
+        if let token = authenticator.getStoredToken() {
+            if api == nil {
+                api = EAIdentityAPI(accessToken: token)
             }
+            return api!
         }
         
-        // Need to authenticate
-        let token: String
-        
-        // Try to get a valid token (may refresh if needed)
-        do {
-            token = try await authenticator.getValidToken()
-        } catch {
-            // Need interactive authentication
-            #if os(macOS)
-            // Hop to the main actor to safely access NSApplication.shared.keyWindow
-            let keyWindow: ASPresentationAnchor? = await MainActor.run { () -> ASPresentationAnchor? in
-                return NSApplication.shared.keyWindow
-            }
-            if let anchor = anchor ?? keyWindow {
-                token = try await authenticator.authenticateWithWeb(anchor: anchor)
-            } else {
-                throw EAAuthError.noToken
-            }
-            #elseif os(iOS)
-            if let anchor = anchor {
-                token = try await authenticator.authenticateWithWeb(anchor: anchor)
-            } else {
-                throw EAAuthError.noToken
-            }
-            #else
-            throw EAAuthError.noToken
-            #endif
-        }
-        
-        let newApi = EAIdentityAPI(accessToken: token)
-        self.api = newApi
-        return newApi
+        // No token available
+        throw EAAuthError.noToken
     }
 }
 
@@ -208,10 +166,9 @@ public final class EAClient: @unchecked Sendable {
 public extension EAClient {
     
     /// Get all identity information as a dictionary
-    /// - Parameter anchor: Presentation anchor for auth UI
     /// - Returns: Dictionary with identity information
-    func getIdentityDictionary(anchor: ASPresentationAnchor? = nil) async throws -> [String: String] {
-        let identity = try await getIdentity(anchor: anchor)
+    func getIdentityDictionary() async throws -> [String: String] {
+        let identity = try await getIdentity()
         
         var dict: [String: String] = [
             "pidId": identity.pidId,
@@ -245,15 +202,11 @@ public extension EAClient {
     /// Shared client instance for convenience
     static let shared = EAClient()
     
-    /// Quick lookup of EA identity using credentials
-    /// - Parameters:
-    ///   - email: EA account email
-    ///   - password: EA account password
+    /// Quick lookup of EA identity using a token
+    /// - Parameter token: EA access token
     /// - Returns: The EA identity
-    static func lookup(email: String, password: String) async throws -> EAIdentity {
-        let client = EAClient()
-        try await client.authenticate(email: email, password: password)
+    static func lookup(token: String) async throws -> EAIdentity {
+        let client = EAClient(token: token)
         return try await client.getIdentity()
     }
 }
-
