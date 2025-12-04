@@ -288,6 +288,7 @@ public final class EAWebAuthenticator: NSObject {
     
     private func handleTokenCapture(_ token: String) {
         guard capturedToken == nil else { return } // Only capture once
+        guard !token.isEmpty else { return }
         
         capturedToken = token
         
@@ -307,6 +308,70 @@ public final class EAWebAuthenticator: NSObject {
             self.tokenContinuation?.resume(returning: token)
             self.tokenContinuation = nil
             self.dismiss()
+        }
+    }
+    
+    /// Try to extract token by making a direct API call using the webview's cookies
+    private func tryDirectAPICall() {
+        guard let webView = webView, capturedToken == nil else { return }
+        
+        // Use JavaScript to make a fetch call to the identity endpoint
+        // This will use the webview's cookies for authentication
+        let script = """
+        (async function() {
+            try {
+                const response = await fetch('https://gateway.ea.com/proxy/identity/pids/me', {
+                    method: 'GET',
+                    credentials: 'include',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                });
+                
+                if (response.ok) {
+                    // The interceptor should have caught the token
+                    // But let's also check if we got a valid response
+                    const data = await response.json();
+                    return JSON.stringify({success: true, data: data});
+                } else {
+                    return JSON.stringify({success: false, status: response.status});
+                }
+            } catch (e) {
+                return JSON.stringify({success: false, error: e.message});
+            }
+        })();
+        """
+        
+        webView.evaluateJavaScript(script) { [weak self] result, error in
+            // The fetch interceptor should have captured the token
+            // This is just a fallback to trigger the API call
+            if let resultString = result as? String,
+               let data = resultString.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let success = json["success"] as? Bool,
+               success {
+                // API call succeeded, token should have been captured by interceptor
+            }
+        }
+    }
+    
+    /// Try to get token from stored cookies/session
+    private func tryExtractFromCookies() {
+        guard capturedToken == nil else { return }
+        
+        WKWebsiteDataStore.default().httpCookieStore.getAllCookies { [weak self] cookies in
+            // Look for EA session cookies that might contain token info
+            for cookie in cookies {
+                if cookie.domain.contains("ea.com") {
+                    // Some EA cookies might contain session info
+                    // This is a fallback - the JS intercept should work first
+                }
+            }
+            
+            // If no token captured yet, try making a direct API call
+            DispatchQueue.main.async {
+                self?.tryDirectAPICall()
+            }
         }
     }
     
@@ -335,14 +400,74 @@ public final class EAWebAuthenticator: NSObject {
     // MARK: - JavaScript Intercept Script
     
     /// JavaScript that intercepts fetch/XHR requests and captures Authorization headers
+    /// Also checks localStorage and sessionStorage for EA tokens
     private static let tokenInterceptScript = """
     (function() {
+        let tokenSent = false;
+        
+        function sendToken(token) {
+            if (tokenSent || !token) return;
+            tokenSent = true;
+            try {
+                window.webkit.messageHandlers.tokenCapture.postMessage(token);
+            } catch(e) {
+                console.log('Failed to send token:', e);
+            }
+        }
+        
+        // Check localStorage and sessionStorage for EA tokens
+        function checkStorage() {
+            try {
+                // Check various known EA token storage keys
+                const storageKeys = [
+                    'access_token', 'accessToken', 'token', 
+                    'ea_access_token', 'eaAccessToken',
+                    'bearer_token', 'bearerToken',
+                    'auth_token', 'authToken'
+                ];
+                
+                for (const key of storageKeys) {
+                    let value = localStorage.getItem(key) || sessionStorage.getItem(key);
+                    if (value) {
+                        // Clean up the token if it has Bearer prefix
+                        if (value.startsWith('Bearer ')) {
+                            value = value.substring(7);
+                        }
+                        // Basic validation - EA tokens are usually long alphanumeric strings
+                        if (value.length > 20 && /^[A-Za-z0-9_-]+$/.test(value)) {
+                            sendToken(value);
+                            return;
+                        }
+                    }
+                }
+                
+                // Also check for JSON stored auth data
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    if (key && (key.toLowerCase().includes('auth') || key.toLowerCase().includes('token'))) {
+                        try {
+                            const data = JSON.parse(localStorage.getItem(key));
+                            if (data && (data.access_token || data.accessToken || data.token)) {
+                                let token = data.access_token || data.accessToken || data.token;
+                                if (token.startsWith('Bearer ')) token = token.substring(7);
+                                if (token.length > 20) {
+                                    sendToken(token);
+                                    return;
+                                }
+                            }
+                        } catch(e) {}
+                    }
+                }
+            } catch(e) {
+                console.log('Storage check error:', e);
+            }
+        }
+        
         // Store original fetch
         const originalFetch = window.fetch;
         
         // Override fetch
         window.fetch = function(input, init) {
-            // Check if this is a request to gateway.ea.com
             let url = '';
             if (typeof input === 'string') {
                 url = input;
@@ -350,32 +475,33 @@ public final class EAWebAuthenticator: NSObject {
                 url = input.url;
             }
             
-            if (url.includes('gateway.ea.com')) {
-                // Check for Authorization header
-                let authHeader = null;
-                
-                if (init && init.headers) {
-                    if (init.headers instanceof Headers) {
-                        authHeader = init.headers.get('Authorization');
-                    } else if (typeof init.headers === 'object') {
-                        authHeader = init.headers['Authorization'] || init.headers['authorization'];
-                    }
+            // Check any request for Authorization header (not just gateway.ea.com)
+            // EA might use the token on various domains
+            let authHeader = null;
+            
+            if (init && init.headers) {
+                if (init.headers instanceof Headers) {
+                    authHeader = init.headers.get('Authorization');
+                } else if (typeof init.headers === 'object') {
+                    authHeader = init.headers['Authorization'] || init.headers['authorization'];
                 }
-                
-                if (input instanceof Request) {
-                    authHeader = authHeader || input.headers.get('Authorization');
-                }
-                
-                if (authHeader && authHeader.startsWith('Bearer ')) {
-                    const token = authHeader.substring(7);
-                    window.webkit.messageHandlers.tokenCapture.postMessage(token);
+            }
+            
+            if (input instanceof Request) {
+                authHeader = authHeader || input.headers.get('Authorization');
+            }
+            
+            if (authHeader && authHeader.startsWith('Bearer ')) {
+                const token = authHeader.substring(7);
+                if (token.length > 20) {
+                    sendToken(token);
                 }
             }
             
             return originalFetch.apply(this, arguments);
         };
         
-        // Store original XMLHttpRequest
+        // Store original XMLHttpRequest methods
         const originalXHROpen = XMLHttpRequest.prototype.open;
         const originalXHRSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
         const originalXHRSend = XMLHttpRequest.prototype.send;
@@ -397,17 +523,40 @@ public final class EAWebAuthenticator: NSObject {
         };
         
         XMLHttpRequest.prototype.send = function() {
-            if (this._url && this._url.includes('gateway.ea.com')) {
-                const headers = xhrHeaders.get(this) || {};
-                const authHeader = headers['authorization'];
-                
-                if (authHeader && authHeader.startsWith('Bearer ')) {
-                    const token = authHeader.substring(7);
-                    window.webkit.messageHandlers.tokenCapture.postMessage(token);
+            const headers = xhrHeaders.get(this) || {};
+            const authHeader = headers['authorization'];
+            
+            if (authHeader && authHeader.startsWith('Bearer ')) {
+                const token = authHeader.substring(7);
+                if (token.length > 20) {
+                    sendToken(token);
                 }
             }
+            
             return originalXHRSend.apply(this, arguments);
         };
+        
+        // Check storage periodically and on page events
+        checkStorage();
+        
+        // Poll for token in storage every 2 seconds
+        const pollInterval = setInterval(function() {
+            if (tokenSent) {
+                clearInterval(pollInterval);
+                return;
+            }
+            checkStorage();
+        }, 2000);
+        
+        // Also check when DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', checkStorage);
+        }
+        
+        // And when page is fully loaded
+        window.addEventListener('load', function() {
+            setTimeout(checkStorage, 1000);
+        });
         
         console.log('EA Token interceptor installed');
     })();
@@ -420,8 +569,37 @@ public final class EAWebAuthenticator: NSObject {
 extension EAWebAuthenticator: WKNavigationDelegate {
     
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        // Check if we're on a page that might have the token
-        // The EA site makes API calls after login that contain the token
+        guard let url = webView.url else { return }
+        let urlString = url.absoluteString.lowercased()
+        
+        // Check if we've completed login (redirected away from login page)
+        let isLoginPage = urlString.contains("signin.ea.com") ||
+                          urlString.contains("/login") ||
+                          urlString.contains("accounts.ea.com/connect")
+        
+        let isEAPage = urlString.contains("ea.com")
+        let isLoggedInPage = isEAPage && !isLoginPage
+        
+        // If we're on the account page or similar, try to extract the token
+        if urlString.contains("myaccount.ea.com") || urlString.contains("gateway.ea.com") {
+            // We're on a page that should have made API calls
+            // Give the interceptor a moment to capture the token
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                guard self?.capturedToken == nil else { return }
+                // If still no token, try cookies/direct call
+                self?.tryExtractFromCookies()
+            }
+        } else if isLoggedInPage && capturedToken == nil {
+            // User appears to be logged in, navigate to a page that will make gateway API calls
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                guard self?.capturedToken == nil else { return }
+                
+                // Navigate to account page which makes identity API calls
+                if let accountURL = URL(string: "https://myaccount.ea.com/cp-ui/aboutme/index") {
+                    webView.load(URLRequest(url: accountURL))
+                }
+            }
+        }
     }
     
     public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -430,12 +608,17 @@ extension EAWebAuthenticator: WKNavigationDelegate {
         if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
             return
         }
-        handleError(WebAuthError.webViewError(error.localizedDescription))
+        // Don't fail completely - the user might still be able to navigate
+        print("Navigation error: \(error.localizedDescription)")
     }
     
     public func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         // Allow all navigation
         decisionHandler(.allow)
+    }
+    
+    public func webView(_ webView: WKWebView, didReceiveServerRedirectForProvisionalNavigation navigation: WKNavigation!) {
+        // Track redirects to detect login completion
     }
 }
 
