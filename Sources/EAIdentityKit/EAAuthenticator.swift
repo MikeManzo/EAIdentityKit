@@ -119,34 +119,34 @@ public final class EAAuthenticator: NSObject, ASWebAuthenticationPresentationCon
     // MARK: - Types
     
     /// Known EA OAuth client IDs
-    /// Note: Origin has been shut down as of April 2025. These are EA App client IDs.
+    /// Note: Origin has been shut down as of April 2025. These are current working client IDs.
     public enum ClientID: String, Sendable, CaseIterable {
-        /// EA App desktop client (recommended)
-        case eaApp = "EAX_PC"
-        /// EA App authenticator
-        case eaAuthenticator = "EADM_AUTHENTICATOR"
-        /// Juno PC client (EA App internal name)
-        case junoPC = "JUNO_PC_CLIENT"
-        /// EA web client
-        case eaWeb = "EA_WEB"
-        /// Battlefield client
-        case battlefield = "sparta-backend-as-user-pc"
-        /// FC (FIFA) web client
+        /// EA Help / Community client (most reliable)
+        case eaHelp = "origin_CE"
+        /// FC/FIFA Web App client
         case fcWeb = "FC25_JS_WEB_APP"
+        /// Battlefield/Sparta client
+        case battlefield = "sparta-backend-as-user-pc"
+        /// FIFA/FC Mobile Companion
+        case fcMobile = "FIFA-17-MOBILE-COMPANION"
+        /// EA Sports FC Web
+        case eaSportsFC = "EASFC-web"
         
         /// Default client ID for general use
-        public static let `default`: ClientID = .eaApp
+        public static let `default`: ClientID = .eaHelp
         
         var redirectUri: String {
             switch self {
-            case .eaApp, .eaAuthenticator, .junoPC:
-                return "https://www.ea.com/login/redirect"
-            case .eaWeb:
-                return "https://www.ea.com/login"
-            case .battlefield:
-                return "http://127.0.0.1:3000/callback"
+            case .eaHelp:
+                return "https://help.ea.com/sso/login/"
             case .fcWeb:
                 return "https://www.ea.com/ea-sports-fc/ultimate-team/web-app/auth.html"
+            case .battlefield:
+                return "http://127.0.0.1:3000/callback"
+            case .fcMobile:
+                return "https://accounts.ea.com/connect/auth"
+            case .eaSportsFC:
+                return "https://www.easports.com/fifa/ultimate-team/web-app/auth.html"
             }
         }
     }
