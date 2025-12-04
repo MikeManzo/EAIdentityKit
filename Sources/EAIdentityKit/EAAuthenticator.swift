@@ -121,23 +121,19 @@ public final class EAAuthenticator: NSObject, ASWebAuthenticationPresentationCon
     /// Known EA OAuth client IDs
     /// Note: Origin has been shut down as of April 2025. These are current working client IDs.
     public enum ClientID: String, Sendable, CaseIterable {
-        /// EA Sports FC Web - uses implicit flow, returns token in URL fragment
-        case eaSportsFC = "EASFC-web"
-        /// FC/FIFA Web App client
-        case fcWeb = "FC25_JS_WEB_APP"
+        /// FC 25 Web App client - supports implicit token flow
+        case fc25Web = "FC25_JS_WEB_APP"
         /// Battlefield/Sparta client
         case battlefield = "sparta-backend-as-user-pc"
         /// EA Help / Community client (uses code flow)
         case eaHelp = "origin_CE"
         
-        /// Default client ID for general use (uses implicit flow for better compatibility)
-        public static let `default`: ClientID = .eaSportsFC
+        /// Default client ID for general use
+        public static let `default`: ClientID = .fc25Web
         
         var redirectUri: String {
             switch self {
-            case .eaSportsFC:
-                return "https://www.easports.com/fifa/ultimate-team/web-app/auth.html"
-            case .fcWeb:
+            case .fc25Web:
                 return "https://www.ea.com/ea-sports-fc/ultimate-team/web-app/auth.html"
             case .battlefield:
                 return "http://127.0.0.1:3000/callback"
@@ -152,16 +148,6 @@ public final class EAAuthenticator: NSObject, ASWebAuthenticationPresentationCon
                 return "http"
             }
             return "https"
-        }
-        
-        /// Whether this client uses implicit flow (token) or code flow
-        var usesImplicitFlow: Bool {
-            switch self {
-            case .eaSportsFC, .fcWeb:
-                return true
-            case .battlefield, .eaHelp:
-                return false
-            }
         }
     }
     
@@ -262,15 +248,18 @@ public final class EAAuthenticator: NSObject, ASWebAuthenticationPresentationCon
     private func performWebAuthentication(completion: @escaping @Sendable (Result<String, Error>) -> Void) {
         var components = URLComponents(string: URLs.auth)!
         
-        // Use implicit flow (token) for compatible clients, code flow for others
-        let responseType = clientId.usesImplicitFlow ? "token" : "code"
-        
+        // Use the FC25 web app OAuth parameters which support token response
         components.queryItems = [
-            URLQueryItem(name: "client_id", value: clientId.rawValue),
-            URLQueryItem(name: "response_type", value: responseType),
+            URLQueryItem(name: "hide_create", value: "true"),
+            URLQueryItem(name: "display", value: "web2/login"),
+            URLQueryItem(name: "scope", value: "basic.identity offline signin basic.entitlement basic.persona"),
+            URLQueryItem(name: "release_type", value: "prod"),
+            URLQueryItem(name: "response_type", value: "token"),
             URLQueryItem(name: "redirect_uri", value: clientId.redirectUri),
+            URLQueryItem(name: "accessToken", value: ""),
             URLQueryItem(name: "locale", value: "en_US"),
-            URLQueryItem(name: "display", value: "web2/login")
+            URLQueryItem(name: "prompt", value: "login"),
+            URLQueryItem(name: "client_id", value: clientId.rawValue)
         ]
         
         guard let authURL = components.url else {
