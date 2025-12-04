@@ -121,32 +121,46 @@ public final class EAAuthenticator: NSObject, ASWebAuthenticationPresentationCon
     /// Known EA OAuth client IDs
     /// Note: Origin has been shut down as of April 2025. These are current working client IDs.
     public enum ClientID: String, Sendable, CaseIterable {
-        /// EA Help / Community client (most reliable)
-        case eaHelp = "origin_CE"
+        /// EA Sports FC Web - uses implicit flow, returns token in URL fragment
+        case eaSportsFC = "EASFC-web"
         /// FC/FIFA Web App client
         case fcWeb = "FC25_JS_WEB_APP"
         /// Battlefield/Sparta client
         case battlefield = "sparta-backend-as-user-pc"
-        /// FIFA/FC Mobile Companion
-        case fcMobile = "FIFA-17-MOBILE-COMPANION"
-        /// EA Sports FC Web
-        case eaSportsFC = "EASFC-web"
+        /// EA Help / Community client (uses code flow)
+        case eaHelp = "origin_CE"
         
-        /// Default client ID for general use
-        public static let `default`: ClientID = .eaHelp
+        /// Default client ID for general use (uses implicit flow for better compatibility)
+        public static let `default`: ClientID = .eaSportsFC
         
         var redirectUri: String {
             switch self {
-            case .eaHelp:
-                return "https://help.ea.com/sso/login/"
+            case .eaSportsFC:
+                return "https://www.easports.com/fifa/ultimate-team/web-app/auth.html"
             case .fcWeb:
                 return "https://www.ea.com/ea-sports-fc/ultimate-team/web-app/auth.html"
             case .battlefield:
                 return "http://127.0.0.1:3000/callback"
-            case .fcMobile:
-                return "https://accounts.ea.com/connect/auth"
-            case .eaSportsFC:
-                return "https://www.easports.com/fifa/ultimate-team/web-app/auth.html"
+            case .eaHelp:
+                return "https://help.ea.com/sso/login/"
+            }
+        }
+        
+        /// The URL scheme to listen for in ASWebAuthenticationSession
+        var callbackScheme: String {
+            if redirectUri.starts(with: "http://127.0.0.1") {
+                return "http"
+            }
+            return "https"
+        }
+        
+        /// Whether this client uses implicit flow (token) or code flow
+        var usesImplicitFlow: Bool {
+            switch self {
+            case .eaSportsFC, .fcWeb:
+                return true
+            case .battlefield, .eaHelp:
+                return false
             }
         }
     }
@@ -247,12 +261,16 @@ public final class EAAuthenticator: NSObject, ASWebAuthenticationPresentationCon
     
     private func performWebAuthentication(completion: @escaping @Sendable (Result<String, Error>) -> Void) {
         var components = URLComponents(string: URLs.auth)!
+        
+        // Use implicit flow (token) for compatible clients, code flow for others
+        let responseType = clientId.usesImplicitFlow ? "token" : "code"
+        
         components.queryItems = [
             URLQueryItem(name: "client_id", value: clientId.rawValue),
-            URLQueryItem(name: "response_type", value: "token"),
+            URLQueryItem(name: "response_type", value: responseType),
             URLQueryItem(name: "redirect_uri", value: clientId.redirectUri),
             URLQueryItem(name: "locale", value: "en_US"),
-            URLQueryItem(name: "display", value: "web/login")
+            URLQueryItem(name: "display", value: "web2/login")
         ]
         
         guard let authURL = components.url else {
@@ -260,15 +278,8 @@ public final class EAAuthenticator: NSObject, ASWebAuthenticationPresentationCon
             return
         }
         
-        // Determine callback scheme
-        let callbackScheme: String
-        if clientId.redirectUri.starts(with: "nucleus://") {
-            callbackScheme = "nucleus"
-        } else if clientId.redirectUri.starts(with: "http://127.0.0.1") {
-            callbackScheme = "http"
-        } else {
-            callbackScheme = "https"
-        }
+        // Use the callback scheme from the client ID
+        let callbackScheme = clientId.callbackScheme
         
         authSession = ASWebAuthenticationSession(
             url: authURL,
@@ -288,18 +299,41 @@ public final class EAAuthenticator: NSObject, ASWebAuthenticationPresentationCon
                 return
             }
             
-            guard let callbackURL = callbackURL,
-                  let tokenData = self?.extractTokenData(from: callbackURL) else {
+            guard let callbackURL = callbackURL else {
                 completion(.failure(EAAuthError.noToken))
                 return
             }
             
-            // Store the token
-            Task {
-                try? await self?.storeCredentials(tokenData)
+            // Try to extract access token from fragment (implicit flow)
+            if let tokenData = self?.extractTokenData(from: callbackURL) {
+                Task {
+                    try? await self?.storeCredentials(tokenData)
+                }
+                completion(.success(tokenData.accessToken))
+                return
             }
             
-            completion(.success(tokenData.accessToken))
+            // Try to extract authorization code from query (code flow)
+            if let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
+               let code = components.queryItems?.first(where: { $0.name == "code" })?.value {
+                // Exchange code for token
+                Task {
+                    do {
+                        let tokenResponse = try await self?.exchangeCodeForToken(code)
+                        if let token = tokenResponse?.accessToken {
+                            try? await self?.storeCredentials(tokenResponse!)
+                            completion(.success(token))
+                        } else {
+                            completion(.failure(EAAuthError.noToken))
+                        }
+                    } catch {
+                        completion(.failure(error))
+                    }
+                }
+                return
+            }
+            
+            completion(.failure(EAAuthError.noToken))
         }
         
         authSession?.presentationContextProvider = self
