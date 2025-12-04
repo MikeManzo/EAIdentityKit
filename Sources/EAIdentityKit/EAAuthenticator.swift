@@ -119,35 +119,23 @@ public final class EAAuthenticator: NSObject, ASWebAuthenticationPresentationCon
     // MARK: - Types
     
     /// Known EA OAuth client IDs
-    /// Note: Origin has been shut down as of April 2025. These are current working client IDs.
     public enum ClientID: String, Sendable, CaseIterable {
-        /// FC 25 Web App client - supports implicit token flow
-        case fc25Web = "FC25_JS_WEB_APP"
-        /// Battlefield/Sparta client
+        /// Battlefield/Sparta client - works with localhost redirect
         case battlefield = "sparta-backend-as-user-pc"
-        /// EA Help / Community client (uses code flow)
-        case eaHelp = "origin_CE"
         
         /// Default client ID for general use
-        public static let `default`: ClientID = .fc25Web
+        public static let `default`: ClientID = .battlefield
         
         var redirectUri: String {
             switch self {
-            case .fc25Web:
-                return "https://www.ea.com/ea-sports-fc/ultimate-team/web-app/auth.html"
             case .battlefield:
-                return "http://127.0.0.1:3000/callback"
-            case .eaHelp:
-                return "https://help.ea.com/sso/login/"
+                return "http://127.0.0.1:8085/callback"
             }
         }
         
         /// The URL scheme to listen for in ASWebAuthenticationSession
         var callbackScheme: String {
-            if redirectUri.starts(with: "http://127.0.0.1") {
-                return "http"
-            }
-            return "https"
+            return "http"
         }
     }
     
@@ -248,18 +236,11 @@ public final class EAAuthenticator: NSObject, ASWebAuthenticationPresentationCon
     private func performWebAuthentication(completion: @escaping @Sendable (Result<String, Error>) -> Void) {
         var components = URLComponents(string: URLs.auth)!
         
-        // Use the FC25 web app OAuth parameters which support token response
+        // Use code flow with battlefield client which accepts localhost redirect
         components.queryItems = [
-            URLQueryItem(name: "hide_create", value: "true"),
-            URLQueryItem(name: "display", value: "web2/login"),
-            URLQueryItem(name: "scope", value: "basic.identity offline signin basic.entitlement basic.persona"),
-            URLQueryItem(name: "release_type", value: "prod"),
-            URLQueryItem(name: "response_type", value: "token"),
-            URLQueryItem(name: "redirect_uri", value: clientId.redirectUri),
-            URLQueryItem(name: "accessToken", value: ""),
-            URLQueryItem(name: "locale", value: "en_US"),
-            URLQueryItem(name: "prompt", value: "login"),
-            URLQueryItem(name: "client_id", value: clientId.rawValue)
+            URLQueryItem(name: "client_id", value: clientId.rawValue),
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "redirect_uri", value: clientId.redirectUri)
         ]
         
         guard let authURL = components.url else {
@@ -267,7 +248,7 @@ public final class EAAuthenticator: NSObject, ASWebAuthenticationPresentationCon
             return
         }
         
-        // Use the callback scheme from the client ID
+        // Use http scheme for localhost callback
         let callbackScheme = clientId.callbackScheme
         
         authSession = ASWebAuthenticationSession(
