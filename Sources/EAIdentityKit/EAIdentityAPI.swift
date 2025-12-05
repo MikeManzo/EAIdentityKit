@@ -191,9 +191,74 @@ public final class EAIdentityAPI: @unchecked Sendable {
             let (data, response) = try await session.data(for: request)
             try handleHTTPResponse(response, data: data)
             
+            // Debug: print raw response
+            if let jsonString = String(data: data, encoding: .utf8) {
+                print("[EAIdentityAPI] PID response: \(jsonString)")
+            }
+            
+            // Try standard decoding first
             let decoder = JSONDecoder()
-            let pidResponse = try decoder.decode(PIDResponse.self, from: data)
-            return pidResponse.pid
+            do {
+                let pidResponse = try decoder.decode(PIDResponse.self, from: data)
+                return pidResponse.pid
+            } catch {
+                // Try alternative parsing
+                print("[EAIdentityAPI] Standard decoding failed, trying alternative parsing...")
+                
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    // Check for "pid" wrapper
+                    let pidData = json["pid"] as? [String: Any] ?? json
+                    
+                    // Extract pidId from various possible fields
+                    let pidId: String
+                    if let id = pidData["pidId"] as? String {
+                        pidId = id
+                    } else if let id = pidData["pidId"] as? Int {
+                        pidId = String(id)
+                    } else if let id = pidData["nucleusId"] as? String {
+                        pidId = id
+                    } else if let id = pidData["nucleusId"] as? Int {
+                        pidId = String(id)
+                    } else if let id = pidData["userId"] as? String {
+                        pidId = id
+                    } else if let id = pidData["userId"] as? Int {
+                        pidId = String(id)
+                    } else if let id = pidData["externalRefValue"] as? String {
+                        pidId = id
+                    } else {
+                        throw EAIdentityError.missingField("pidId")
+                    }
+                    
+                    return PIDInfo(
+                        pidId: pidId,
+                        externalRefType: pidData["externalRefType"] as? String,
+                        externalRefValue: pidData["externalRefValue"] as? String,
+                        country: pidData["country"] as? String,
+                        language: pidData["language"] as? String,
+                        locale: pidData["locale"] as? String,
+                        status: pidData["status"] as? String,
+                        stopProcessStatus: pidData["stopProcessStatus"] as? String,
+                        reasonCode: pidData["reasonCode"] as? String,
+                        tosVersion: pidData["tosVersion"] as? String,
+                        parentalEmail: pidData["parentalEmail"] as? String,
+                        thirdPartyOptin: pidData["thirdPartyOptin"] as? String,
+                        globalOptin: pidData["globalOptin"] as? String,
+                        dateCreated: pidData["dateCreated"] as? String,
+                        registrationSource: pidData["registrationSource"] as? String,
+                        authenticationSource: pidData["authenticationSource"] as? String,
+                        showEmail: pidData["showEmail"] as? String,
+                        discoverableEmail: pidData["discoverableEmail"] as? String,
+                        anonymousPid: pidData["anonymousPid"] as? String,
+                        underagePid: pidData["underagePid"] as? String,
+                        teenToAdultFlag: pidData["teenToAdultFlag"] as? Bool,
+                        defaultBillingAddressUri: pidData["defaultBillingAddressUri"] as? String,
+                        defaultShippingAddressUri: pidData["defaultShippingAddressUri"] as? String,
+                        passwordSignature: pidData["passwordSignature"] as? String
+                    )
+                }
+                
+                throw EAIdentityError.decodingError("Could not parse PID response")
+            }
             
         } catch let error as EAIdentityError {
             throw error

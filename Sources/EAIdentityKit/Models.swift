@@ -87,6 +87,59 @@ public struct PIDInfo: Codable, Sendable {
     
     /// Password signature for validation
     public let passwordSignature: String?
+    
+    /// Manual initializer for flexible parsing
+    public init(
+        pidId: String,
+        externalRefType: String? = nil,
+        externalRefValue: String? = nil,
+        country: String? = nil,
+        language: String? = nil,
+        locale: String? = nil,
+        status: String? = nil,
+        stopProcessStatus: String? = nil,
+        reasonCode: String? = nil,
+        tosVersion: String? = nil,
+        parentalEmail: String? = nil,
+        thirdPartyOptin: String? = nil,
+        globalOptin: String? = nil,
+        dateCreated: String? = nil,
+        registrationSource: String? = nil,
+        authenticationSource: String? = nil,
+        showEmail: String? = nil,
+        discoverableEmail: String? = nil,
+        anonymousPid: String? = nil,
+        underagePid: String? = nil,
+        teenToAdultFlag: Bool? = nil,
+        defaultBillingAddressUri: String? = nil,
+        defaultShippingAddressUri: String? = nil,
+        passwordSignature: String? = nil
+    ) {
+        self.pidId = pidId
+        self.externalRefType = externalRefType
+        self.externalRefValue = externalRefValue
+        self.country = country
+        self.language = language
+        self.locale = locale
+        self.status = status
+        self.stopProcessStatus = stopProcessStatus
+        self.reasonCode = reasonCode
+        self.tosVersion = tosVersion
+        self.parentalEmail = parentalEmail
+        self.thirdPartyOptin = thirdPartyOptin
+        self.globalOptin = globalOptin
+        self.dateCreated = dateCreated
+        self.registrationSource = registrationSource
+        self.authenticationSource = authenticationSource
+        self.showEmail = showEmail
+        self.discoverableEmail = discoverableEmail
+        self.anonymousPid = anonymousPid
+        self.underagePid = underagePid
+        self.teenToAdultFlag = teenToAdultFlag
+        self.defaultBillingAddressUri = defaultBillingAddressUri
+        self.defaultShippingAddressUri = defaultShippingAddressUri
+        self.passwordSignature = passwordSignature
+    }
 }
 
 // MARK: - Persona Models
