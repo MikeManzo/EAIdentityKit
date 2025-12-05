@@ -253,7 +253,8 @@ public final class EAIdentityAPI: @unchecked Sendable {
                         teenToAdultFlag: pidData["teenToAdultFlag"] as? Bool,
                         defaultBillingAddressUri: pidData["defaultBillingAddressUri"] as? String,
                         defaultShippingAddressUri: pidData["defaultShippingAddressUri"] as? String,
-                        passwordSignature: pidData["passwordSignature"] as? String
+                        passwordSignature: pidData["passwordSignature"] as? Int,
+                        tfaEnabled: pidData["tfaEnabled"] as? Bool
                     )
                 }
                 

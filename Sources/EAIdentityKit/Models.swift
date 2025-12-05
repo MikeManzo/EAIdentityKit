@@ -25,6 +25,21 @@ public struct PIDInfo: Codable, Sendable {
     /// External reference value
     public let externalRefValue: String?
     
+    /// User's email (may be masked)
+    public let email: String?
+    
+    /// Email verification status
+    public let emailStatus: String?
+    
+    /// Password strength
+    public let strength: String?
+    
+    /// Date of birth (may be masked)
+    public let dob: String?
+    
+    /// User's age
+    public let age: Int?
+    
     /// User's country code (e.g., "US")
     public let country: String?
     
@@ -58,6 +73,12 @@ public struct PIDInfo: Codable, Sendable {
     /// Account creation date
     public let dateCreated: String?
     
+    /// Account last modified date
+    public let dateModified: String?
+    
+    /// Last authentication date
+    public let lastAuthDate: String?
+    
     /// Source of account registration (e.g., "eadm-origin")
     public let registrationSource: String?
     
@@ -86,13 +107,74 @@ public struct PIDInfo: Codable, Sendable {
     public let defaultShippingAddressUri: String?
     
     /// Password signature for validation
-    public let passwordSignature: String?
+    public let passwordSignature: Int?
+    
+    /// Whether two-factor authentication is enabled
+    public let tfaEnabled: Bool?
+    
+    /// Custom decoder to handle pidId as Int or String
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        // Handle pidId as either Int or String
+        if let intId = try? container.decode(Int.self, forKey: .pidId) {
+            pidId = String(intId)
+        } else {
+            pidId = try container.decode(String.self, forKey: .pidId)
+        }
+        
+        externalRefType = try container.decodeIfPresent(String.self, forKey: .externalRefType)
+        externalRefValue = try container.decodeIfPresent(String.self, forKey: .externalRefValue)
+        email = try container.decodeIfPresent(String.self, forKey: .email)
+        emailStatus = try container.decodeIfPresent(String.self, forKey: .emailStatus)
+        strength = try container.decodeIfPresent(String.self, forKey: .strength)
+        dob = try container.decodeIfPresent(String.self, forKey: .dob)
+        age = try container.decodeIfPresent(Int.self, forKey: .age)
+        country = try container.decodeIfPresent(String.self, forKey: .country)
+        language = try container.decodeIfPresent(String.self, forKey: .language)
+        locale = try container.decodeIfPresent(String.self, forKey: .locale)
+        status = try container.decodeIfPresent(String.self, forKey: .status)
+        stopProcessStatus = try container.decodeIfPresent(String.self, forKey: .stopProcessStatus)
+        reasonCode = try container.decodeIfPresent(String.self, forKey: .reasonCode)
+        tosVersion = try container.decodeIfPresent(String.self, forKey: .tosVersion)
+        parentalEmail = try container.decodeIfPresent(String.self, forKey: .parentalEmail)
+        thirdPartyOptin = try container.decodeIfPresent(String.self, forKey: .thirdPartyOptin)
+        globalOptin = try container.decodeIfPresent(String.self, forKey: .globalOptin)
+        dateCreated = try container.decodeIfPresent(String.self, forKey: .dateCreated)
+        dateModified = try container.decodeIfPresent(String.self, forKey: .dateModified)
+        lastAuthDate = try container.decodeIfPresent(String.self, forKey: .lastAuthDate)
+        registrationSource = try container.decodeIfPresent(String.self, forKey: .registrationSource)
+        authenticationSource = try container.decodeIfPresent(String.self, forKey: .authenticationSource)
+        showEmail = try container.decodeIfPresent(String.self, forKey: .showEmail)
+        discoverableEmail = try container.decodeIfPresent(String.self, forKey: .discoverableEmail)
+        anonymousPid = try container.decodeIfPresent(String.self, forKey: .anonymousPid)
+        underagePid = try container.decodeIfPresent(String.self, forKey: .underagePid)
+        teenToAdultFlag = try container.decodeIfPresent(Bool.self, forKey: .teenToAdultFlag)
+        defaultBillingAddressUri = try container.decodeIfPresent(String.self, forKey: .defaultBillingAddressUri)
+        defaultShippingAddressUri = try container.decodeIfPresent(String.self, forKey: .defaultShippingAddressUri)
+        passwordSignature = try container.decodeIfPresent(Int.self, forKey: .passwordSignature)
+        tfaEnabled = try container.decodeIfPresent(Bool.self, forKey: .tfaEnabled)
+    }
+    
+    private enum CodingKeys: String, CodingKey {
+        case pidId, externalRefType, externalRefValue, email, emailStatus, strength, dob, age
+        case country, language, locale, status, stopProcessStatus, reasonCode, tosVersion
+        case parentalEmail, thirdPartyOptin, globalOptin, dateCreated, dateModified, lastAuthDate
+        case registrationSource, authenticationSource, showEmail, discoverableEmail
+        case anonymousPid, underagePid, teenToAdultFlag, defaultBillingAddressUri
+        case defaultShippingAddressUri, passwordSignature, tfaEnabled
+    }
     
     /// Manual initializer for flexible parsing
     public init(
         pidId: String,
         externalRefType: String? = nil,
         externalRefValue: String? = nil,
+        email: String? = nil,
+        emailStatus: String? = nil,
+        strength: String? = nil,
+        dob: String? = nil,
+        age: Int? = nil,
         country: String? = nil,
         language: String? = nil,
         locale: String? = nil,
@@ -104,6 +186,8 @@ public struct PIDInfo: Codable, Sendable {
         thirdPartyOptin: String? = nil,
         globalOptin: String? = nil,
         dateCreated: String? = nil,
+        dateModified: String? = nil,
+        lastAuthDate: String? = nil,
         registrationSource: String? = nil,
         authenticationSource: String? = nil,
         showEmail: String? = nil,
@@ -113,11 +197,17 @@ public struct PIDInfo: Codable, Sendable {
         teenToAdultFlag: Bool? = nil,
         defaultBillingAddressUri: String? = nil,
         defaultShippingAddressUri: String? = nil,
-        passwordSignature: String? = nil
+        passwordSignature: Int? = nil,
+        tfaEnabled: Bool? = nil
     ) {
         self.pidId = pidId
         self.externalRefType = externalRefType
         self.externalRefValue = externalRefValue
+        self.email = email
+        self.emailStatus = emailStatus
+        self.strength = strength
+        self.dob = dob
+        self.age = age
         self.country = country
         self.language = language
         self.locale = locale
@@ -129,6 +219,8 @@ public struct PIDInfo: Codable, Sendable {
         self.thirdPartyOptin = thirdPartyOptin
         self.globalOptin = globalOptin
         self.dateCreated = dateCreated
+        self.dateModified = dateModified
+        self.lastAuthDate = lastAuthDate
         self.registrationSource = registrationSource
         self.authenticationSource = authenticationSource
         self.showEmail = showEmail
@@ -139,6 +231,7 @@ public struct PIDInfo: Codable, Sendable {
         self.defaultBillingAddressUri = defaultBillingAddressUri
         self.defaultShippingAddressUri = defaultShippingAddressUri
         self.passwordSignature = passwordSignature
+        self.tfaEnabled = tfaEnabled
     }
 }
 
