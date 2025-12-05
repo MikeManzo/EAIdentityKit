@@ -286,24 +286,47 @@ public final class EAIdentityAPI: @unchecked Sendable {
             let (data, response) = try await session.data(for: request)
             try handleHTTPResponse(response, data: data)
             
+            // Debug: print raw response
+            if let jsonString = String(data: data, encoding: .utf8) {
+                print("[EAIdentityAPI] Persona response: \(jsonString)")
+            }
+            
             // Parse the JSON response from EA gateway
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                print("[EAIdentityAPI] Parsed JSON keys: \(json.keys)")
+                
                 // Handle {"personas": {"persona": [...]}} format
                 if let personasWrapper = json["personas"] as? [String: Any],
                    let personaArray = personasWrapper["persona"] as? [[String: Any]],
                    let firstPersona = personaArray.first {
+                    print("[EAIdentityAPI] Found persona in personas.persona array")
                     return try parsePersonaJSON(firstPersona, userId: pidId)
                 }
                 
                 // Handle {"personas": [...]} format
                 if let personas = json["personas"] as? [[String: Any]],
                    let firstPersona = personas.first {
+                    print("[EAIdentityAPI] Found persona in personas array")
                     return try parsePersonaJSON(firstPersona, userId: pidId)
                 }
                 
                 // Handle single persona object
-                if let personaId = json["personaId"] {
+                if json["personaId"] != nil {
+                    print("[EAIdentityAPI] Found single persona object")
                     return try parsePersonaJSON(json, userId: pidId)
+                }
+                
+                // Handle {"persona": {...}} format
+                if let persona = json["persona"] as? [String: Any] {
+                    print("[EAIdentityAPI] Found persona in persona object")
+                    return try parsePersonaJSON(persona, userId: pidId)
+                }
+                
+                // Handle {"persona": [...]} array format
+                if let personaArray = json["persona"] as? [[String: Any]],
+                   let firstPersona = personaArray.first {
+                    print("[EAIdentityAPI] Found persona in persona array")
+                    return try parsePersonaJSON(firstPersona, userId: pidId)
                 }
             }
             
