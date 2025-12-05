@@ -315,7 +315,7 @@ public final class EAWebAuthenticator: NSObject {
     private func tryDirectAPICall() {
         guard let webView = webView, capturedToken == nil else { return }
         
-        print("[EAWebAuth] Attempting direct API call to get token...")
+        print("[EAWebAuth] Attempting to get OAuth token using session cookies...")
         
         // Get all cookies from the webview
         webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { [weak self] cookies in
@@ -325,87 +325,95 @@ public final class EAWebAuthenticator: NSObject {
             let eaCookies = cookies.filter { $0.domain.contains("ea.com") }
             print("[EAWebAuth] Found \(eaCookies.count) EA cookies")
             
-            // Look for specific auth cookies
-            for cookie in eaCookies {
-                print("[EAWebAuth] Cookie: \(cookie.name) = \(String(cookie.value.prefix(20)))... (domain: \(cookie.domain))")
-                
-                // Check if this looks like a token cookie
-                if cookie.name.lowercased().contains("token") ||
-                   cookie.name.lowercased().contains("access") ||
-                   cookie.name == "sid" {
-                    let value = cookie.value
-                    // EA tokens are typically long alphanumeric strings
-                    if value.count > 50 && !value.contains("=") {
-                        print("[EAWebAuth] Found potential token in cookie: \(cookie.name)")
-                        self.handleTokenCapture(value)
-                        return
-                    }
-                }
-            }
-            
-            // If no token cookie found, try making an API call with cookies
-            self.makeAuthenticatedAPICall(cookies: eaCookies)
+            // We have session cookies - now request an OAuth token
+            self.requestOAuthToken(cookies: eaCookies)
         }
     }
     
-    /// Make an API call using cookies to try to get a token response
-    private func makeAuthenticatedAPICall(cookies: [HTTPCookie]) {
+    /// Request an OAuth token using session cookies
+    private func requestOAuthToken(cookies: [HTTPCookie]) {
         guard capturedToken == nil else { return }
         
-        print("[EAWebAuth] Making authenticated API call...")
+        print("[EAWebAuth] Requesting OAuth token from EA...")
         
-        // Create a URL session with the cookies
+        // Create cookie storage with EA cookies
+        let cookieStorage = HTTPCookieStorage.shared
+        for cookie in cookies {
+            cookieStorage.setCookie(cookie)
+        }
+        
         let config = URLSessionConfiguration.default
-        config.httpCookieStorage?.setCookies(cookies, for: URL(string: "https://www.ea.com")!, mainDocumentURL: nil)
-        config.httpCookieStorage?.setCookies(cookies, for: URL(string: "https://accounts.ea.com")!, mainDocumentURL: nil)
+        config.httpCookieStorage = cookieStorage
+        config.httpShouldSetCookies = true
+        config.httpCookieAcceptPolicy = .always
         
         let session = URLSession(configuration: config)
         
-        // Try the token endpoint that might return a token
-        guard let url = URL(string: "https://accounts.ea.com/connect/auth?client_id=ORIGIN_JS_SDK&response_type=token&redirect_uri=nucleus:rest&prompt=none") else {
-            return
-        }
+        // Try to get a token using the implicit flow with cookies
+        // This endpoint should return a token if the user is logged in
+        let authURL = "https://accounts.ea.com/connect/auth?response_type=token&client_id=ORIGIN_JS_SDK&redirect_uri=nucleus:rest&prompt=none"
+        
+        guard let url = URL(string: authURL) else { return }
         
         var request = URLRequest(url: url)
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue("https://www.ea.com", forHTTPHeaderField: "Origin")
+        request.setValue("https://www.ea.com/", forHTTPHeaderField: "Referer")
+        
+        print("[EAWebAuth] Calling: \(authURL)")
         
         let task = session.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self, self.capturedToken == nil else { return }
             
+            if let error = error {
+                print("[EAWebAuth] Request error: \(error.localizedDescription)")
+                // Try alternative method
+                DispatchQueue.main.async {
+                    self.tryWebViewTokenRequest()
+                }
+                return
+            }
+            
             if let httpResponse = response as? HTTPURLResponse {
-                print("[EAWebAuth] API response status: \(httpResponse.statusCode)")
+                print("[EAWebAuth] Response status: \(httpResponse.statusCode)")
+                print("[EAWebAuth] Response URL: \(httpResponse.url?.absoluteString ?? "nil")")
                 
                 // Check if we got redirected to a URL with the token
                 if let responseURL = httpResponse.url?.absoluteString {
-                    print("[EAWebAuth] Response URL: \(responseURL)")
-                    
-                    if responseURL.contains("access_token=") {
-                        // Extract token from URL
-                        if let range = responseURL.range(of: "access_token=") {
-                            let afterToken = responseURL[range.upperBound...]
-                            let token: String
-                            if let endIndex = afterToken.firstIndex(where: { $0 == "&" || $0 == "#" }) {
-                                token = String(afterToken[..<endIndex])
-                            } else {
-                                token = String(afterToken)
-                            }
-                            print("[EAWebAuth] Extracted token from redirect URL!")
-                            DispatchQueue.main.async {
-                                self.handleTokenCapture(token)
-                            }
-                            return
+                    if let token = self.extractTokenFromURL(responseURL) {
+                        print("[EAWebAuth] Got token from redirect!")
+                        DispatchQueue.main.async {
+                            self.handleTokenCapture(token)
                         }
+                        return
                     }
                 }
                 
-                // Check response body
-                if let data = data, let body = String(data: data, encoding: .utf8) {
-                    print("[EAWebAuth] Response body preview: \(String(body.prefix(200)))")
-                    
-                    // Try to parse as JSON
-                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                        if let token = json["access_token"] as? String {
-                            print("[EAWebAuth] Found token in JSON response!")
+                // Check response body for token
+                if let data = data {
+                    if let body = String(data: data, encoding: .utf8) {
+                        print("[EAWebAuth] Response body: \(String(body.prefix(500)))")
+                        
+                        // Check for JSON token response
+                        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                            if let token = json["access_token"] as? String {
+                                print("[EAWebAuth] Got token from JSON response!")
+                                DispatchQueue.main.async {
+                                    self.handleTokenCapture(token)
+                                }
+                                return
+                            }
+                            if let code = json["code"] as? String {
+                                // Got an auth code, need to exchange it
+                                print("[EAWebAuth] Got auth code, exchanging for token...")
+                                self.exchangeCodeForToken(code)
+                                return
+                            }
+                        }
+                        
+                        // Check for token in body text
+                        if let token = self.extractTokenFromURL(body) {
+                            print("[EAWebAuth] Got token from response body!")
                             DispatchQueue.main.async {
                                 self.handleTokenCapture(token)
                             }
@@ -415,19 +423,149 @@ public final class EAWebAuthenticator: NSObject {
                 }
             }
             
-            // If that didn't work, try using JavaScript to check for tokens in the page
+            // If direct request didn't work, try via WebView JavaScript
             DispatchQueue.main.async {
-                self.tryJavaScriptExtraction()
+                self.tryWebViewTokenRequest()
             }
         }
         task.resume()
+    }
+    
+    /// Extract access token from a URL string
+    private func extractTokenFromURL(_ urlString: String) -> String? {
+        // Look for access_token parameter
+        if let range = urlString.range(of: "access_token=") {
+            let afterToken = urlString[range.upperBound...]
+            let endChars: [Character] = ["&", "#", "\"", "'", " ", "\n", "\r"]
+            
+            var endIndex = afterToken.endIndex
+            for char in endChars {
+                if let idx = afterToken.firstIndex(of: char) {
+                    if idx < endIndex {
+                        endIndex = idx
+                    }
+                }
+            }
+            
+            let token = String(afterToken[..<endIndex])
+            if token.count > 20 {
+                return token
+            }
+        }
+        return nil
+    }
+    
+    /// Exchange authorization code for token
+    private func exchangeCodeForToken(_ code: String) {
+        print("[EAWebAuth] Exchanging code for token...")
+        
+        guard let url = URL(string: "https://accounts.ea.com/connect/token") else { return }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        
+        let body = "grant_type=authorization_code&code=\(code)&client_id=ORIGIN_JS_SDK&redirect_uri=nucleus:rest"
+        request.httpBody = body.data(using: .utf8)
+        
+        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let self = self, self.capturedToken == nil else { return }
+            
+            if let data = data,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let token = json["access_token"] as? String {
+                print("[EAWebAuth] Got token from code exchange!")
+                DispatchQueue.main.async {
+                    self.handleTokenCapture(token)
+                }
+            }
+        }
+        task.resume()
+    }
+    
+    /// Try to get token by making request via WebView (uses its cookie jar)
+    private func tryWebViewTokenRequest() {
+        guard let webView = webView, capturedToken == nil else { return }
+        
+        print("[EAWebAuth] Trying to get token via WebView fetch...")
+        
+        let script = """
+        (async function() {
+            try {
+                // Try to get an OAuth token using the session
+                const response = await fetch('https://accounts.ea.com/connect/auth?response_type=token&client_id=ORIGIN_JS_SDK&redirect_uri=nucleus:rest&prompt=none', {
+                    credentials: 'include',
+                    redirect: 'follow'
+                });
+                
+                const finalURL = response.url;
+                const text = await response.text();
+                
+                // Check URL for token
+                if (finalURL.includes('access_token=')) {
+                    const match = finalURL.match(/access_token=([^&]+)/);
+                    if (match) {
+                        return JSON.stringify({success: true, token: match[1], source: 'redirect_url'});
+                    }
+                }
+                
+                // Check response body
+                if (text.includes('access_token')) {
+                    const match = text.match(/"access_token"\\s*[":]+\\s*"?([^"&,\\s]+)/);
+                    if (match) {
+                        return JSON.stringify({success: true, token: match[1], source: 'response_body'});
+                    }
+                }
+                
+                // Try parsing as JSON
+                try {
+                    const json = JSON.parse(text);
+                    if (json.access_token) {
+                        return JSON.stringify({success: true, token: json.access_token, source: 'json'});
+                    }
+                } catch(e) {}
+                
+                return JSON.stringify({success: false, url: finalURL, bodyPreview: text.substring(0, 200)});
+            } catch(e) {
+                return JSON.stringify({success: false, error: e.message});
+            }
+        })();
+        """
+        
+        webView.evaluateJavaScript(script) { [weak self] result, error in
+            guard let self = self, self.capturedToken == nil else { return }
+            
+            if let error = error {
+                print("[EAWebAuth] WebView JS error: \(error)")
+                return
+            }
+            
+            if let resultString = result as? String {
+                print("[EAWebAuth] WebView fetch result: \(resultString)")
+                
+                if let data = resultString.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    
+                    if let success = json["success"] as? Bool, success,
+                       let token = json["token"] as? String {
+                        let source = json["source"] as? String ?? "unknown"
+                        print("[EAWebAuth] Got token via WebView from: \(source)")
+                        self.handleTokenCapture(token)
+                    } else {
+                        print("[EAWebAuth] WebView fetch did not return token")
+                        // Try JavaScript extraction as last resort
+                        self.tryJavaScriptExtraction()
+                    }
+                }
+            }
+        }
     }
     
     /// Try to extract token using JavaScript evaluation
     private func tryJavaScriptExtraction() {
         guard let webView = webView, capturedToken == nil else { return }
         
-        print("[EAWebAuth] Trying JavaScript token extraction...")
+        print("[EAWebAuth] Trying JavaScript token extraction from page...")
         
         // JavaScript to search for tokens in various places
         let script = """
@@ -472,29 +610,6 @@ public final class EAWebAuthenticator: NSObject {
                 }
             }
             
-            // Check window object
-            if (window.ea && window.ea.token) {
-                result.found = true;
-                result.token = window.ea.token;
-                result.source = 'window.ea.token';
-                return JSON.stringify(result);
-            }
-            
-            // Check for __NEXT_DATA__ or similar
-            var scripts = document.querySelectorAll('script');
-            for (var s of scripts) {
-                var text = s.textContent;
-                if (text && text.includes('access_token')) {
-                    var match = text.match(/"access_token"\\s*:\\s*"([^"]+)"/);
-                    if (match) {
-                        result.found = true;
-                        result.token = match[1];
-                        result.source = 'inline script';
-                        return JSON.stringify(result);
-                    }
-                }
-            }
-            
             return JSON.stringify(result);
         })();
         """
@@ -518,6 +633,8 @@ public final class EAWebAuthenticator: NSObject {
                     let source = json["source"] as? String ?? "unknown"
                     print("[EAWebAuth] Found token via JS from: \(source)")
                     self.handleTokenCapture(token)
+                } else {
+                    print("[EAWebAuth] No token found via any method")
                 }
             }
         }
@@ -526,7 +643,7 @@ public final class EAWebAuthenticator: NSObject {
     /// Try to get token from stored cookies/session
     private func tryExtractFromCookies() {
         guard capturedToken == nil else { return }
-        print("[EAWebAuth] Trying cookie extraction...")
+        print("[EAWebAuth] Trying to get token using session...")
         tryDirectAPICall()
     }
     
@@ -779,8 +896,8 @@ extension EAWebAuthenticator: WKNavigationDelegate {
                 if let range = urlString.range(of: "access_token=") {
                     let afterToken = urlString[range.upperBound...]
                     let token: String
-                    if let endIndex = afterToken.firstIndex(where: { $0 == "&" || $0 == "#" }) {
-                        token = String(afterToken[..<endIndex])
+                    if let endRange = afterToken.firstIndex(of: "&") ?? afterToken.firstIndex(of: "#") {
+                        token = String(afterToken[..<endRange])
                     } else {
                         token = String(afterToken)
                     }
