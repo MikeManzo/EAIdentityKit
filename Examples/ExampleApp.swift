@@ -3,20 +3,27 @@
 //  EAIdentityKit Example
 //
 //  Example macOS application demonstrating EAIdentityKit usage
+//  Updated for EA App (Origin has been shut down as of April 2025)
 //
 
 /*
  
  To use this example:
  
- 1. Create a new macOS App project in Xcode
- 2. Add EAIdentityKit as a package dependency
- 3. Replace the ContentView.swift with this file's ContentView
- 4. Run the app
+ 1. Create a new macOS App project in Xcode (macOS 12.0+ deployment target)
+ 2. Add EAIdentityKit as a package dependency:
+    - File → Add Package Dependencies
+    - Enter the repository URL or add local package
+ 3. Copy this entire file content into your ContentView.swift
+    (or create a new Swift file and set it as @main)
+ 4. Build and run
+ 
+ Note: Make sure your project's deployment target is macOS 12.0 or later.
  
  */
 
 import SwiftUI
+import WebKit
 import EAIdentityKit
 
 // MARK: - App Entry Point
@@ -47,17 +54,26 @@ struct ContentView: View {
             
             Divider()
             
-            // Main Content
+            // Status
             if viewModel.isLoading {
-                LoadingView()
+                LoadingView(statusMessage: viewModel.statusMessage)
             } else if let identity = viewModel.identity {
                 IdentityDisplayView(identity: identity)
-                
-                Divider()
-                
-                HStack(spacing: 12) {
+            } else if let error = viewModel.errorMessage {
+                ErrorView(message: error) {
+                    viewModel.login()
+                }
+            } else {
+                WelcomeView(viewModel: viewModel)
+            }
+            
+            Spacer()
+            
+            // Footer actions
+            if viewModel.identity != nil {
+                HStack {
                     Button("Refresh") {
-                        viewModel.fetchIdentity()
+                        viewModel.refresh()
                     }
                     .buttonStyle(.bordered)
                     
@@ -66,123 +82,77 @@ struct ContentView: View {
                     }
                     .foregroundColor(.red)
                 }
-            } else if let error = viewModel.errorMessage {
-                ErrorView(message: error) {
-                    viewModel.fetchIdentity()
-                }
-            } else {
-                AuthenticationView(viewModel: viewModel)
-            }
-            
-            Spacer()
-            
-            // Status bar
-            HStack {
-                Circle()
-                    .fill(viewModel.isAuthenticated ? Color.green : Color.red)
-                    .frame(width: 8, height: 8)
-                Text(viewModel.isAuthenticated ? "Authenticated" : "Not authenticated")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
             }
         }
         .padding(30)
-        .frame(minWidth: 550, minHeight: 500)
+        .frame(minWidth: 500, minHeight: 450)
     }
 }
 
-// MARK: - Authentication View
+// MARK: - Welcome View
 
-struct AuthenticationView: View {
+struct WelcomeView: View {
     @ObservedObject var viewModel: IdentityViewModel
-    @State private var email = ""
-    @State private var password = ""
-    @State private var showCredentialAuth = false
     
     var body: some View {
-        VStack(spacing: 24) {
-            // Web Authentication (Recommended)
-            VStack(spacing: 12) {
-                Text("Sign in with EA")
-                    .font(.headline)
-                
-                Button(action: { viewModel.authenticateWithWeb() }) {
-                    HStack {
-                        Image(systemName: "globe")
-                        Text("Sign in with Browser")
-                    }
-                    .frame(maxWidth: 250)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                
-                Text("Recommended - Opens EA login in your browser")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            
-            Divider()
-                .frame(maxWidth: 300)
-            
-            // Credential Authentication (Alternative)
-            VStack(spacing: 12) {
-                Button(action: { showCredentialAuth.toggle() }) {
-                    HStack {
-                        Text("Or sign in with email/password")
-                        Image(systemName: showCredentialAuth ? "chevron.up" : "chevron.down")
-                    }
-                    .font(.subheadline)
-                }
-                .buttonStyle(.plain)
+        VStack(spacing: 20) {
+            Image(systemName: "person.crop.circle.badge.questionmark")
+                .font(.system(size: 60))
                 .foregroundColor(.blue)
-                
-                if showCredentialAuth {
-                    VStack(spacing: 12) {
-                        TextField("Email", text: $email)
-                            .textFieldStyle(.roundedBorder)
-                            .textContentType(.emailAddress)
-                        
-                        SecureField("Password", text: $password)
-                            .textFieldStyle(.roundedBorder)
-                            .textContentType(.password)
-                        
-                        Button("Sign In") {
-                            viewModel.authenticateWithCredentials(email: email, password: password)
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(email.isEmpty || password.isEmpty)
-                        
-                        Text("Note: May fail if CAPTCHA or 2FA is required")
-                            .font(.caption2)
-                            .foregroundColor(.orange)
-                    }
-                    .frame(maxWidth: 300)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+            
+            Text("Sign in with your EA Account")
+                .font(.headline)
+            
+            Text("Click below to open EA's login page. Your token will be captured automatically after you sign in.")
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 350)
+            
+            Button(action: { viewModel.login() }) {
+                HStack {
+                    Image(systemName: "person.badge.key.fill")
+                    Text("Sign In with EA")
                 }
+                .frame(width: 200)
             }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
             
             Divider()
-                .frame(maxWidth: 300)
+                .frame(width: 300)
             
-            // Manual Token Entry
-            VStack(spacing: 12) {
-                DisclosureGroup("Advanced: Enter token manually") {
-                    VStack(spacing: 8) {
-                        SecureField("Access Token", text: $viewModel.manualToken)
-                            .textFieldStyle(.roundedBorder)
-                        
-                        Button("Use Token") {
-                            viewModel.useManualToken()
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(viewModel.manualToken.isEmpty)
+            // Manual token entry (alternative option)
+            DisclosureGroup("Alternative: Enter Token Manually") {
+                VStack(spacing: 12) {
+                    SecureField("Paste your access token here", text: $viewModel.manualToken)
+                        .textFieldStyle(.roundedBorder)
+                    
+                    Button("Use Token") {
+                        viewModel.useManualToken()
                     }
-                    .padding(.top, 8)
+                    .disabled(viewModel.manualToken.isEmpty)
                 }
-                .frame(maxWidth: 300)
+                .padding()
             }
+            .frame(width: 350)
+            
+            // Instructions
+            DisclosureGroup("How to get a token manually") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("**From Browser:**")
+                    Text("1. Go to ea.com and sign in")
+                    Text("2. Open Developer Tools (F12)")
+                    Text("3. Go to Network tab, filter by 'gateway'")
+                    Text("4. Look for requests to gateway.ea.com")
+                    Text("5. Copy the Authorization header")
+                    Text("6. Remove the 'Bearer ' prefix")
+                }
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.top, 8)
+            }
+            .frame(width: 350)
         }
-        .animation(.easeInOut, value: showCredentialAuth)
     }
 }
 
@@ -196,66 +166,42 @@ struct IdentityDisplayView: View {
             HStack {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundColor(.green)
-                    .font(.title2)
-                Text("Identity Retrieved")
+                Text("Authenticated")
                     .font(.headline)
             }
             
-            GroupBox {
+            GroupBox("Account Information") {
                 VStack(alignment: .leading, spacing: 12) {
-                    // Primary identifiers
-                    Group {
-                        InfoRow(label: "EA ID (Username)", value: identity.eaId, copyable: true, highlight: true)
-                        InfoRow(label: "Nucleus ID (pidId)", value: identity.pidId, copyable: true, highlight: true)
-                        InfoRow(label: "Persona ID", value: identity.personaId, copyable: true, highlight: true)
-                    }
+                    InfoRow(label: "EA ID (Username)", value: identity.eaId, copyable: true)
+                    InfoRow(label: "Nucleus ID (pidId)", value: identity.pidId, copyable: true)
+                    InfoRow(label: "Persona ID", value: identity.personaId, copyable: true)
                     
                     Divider()
                     
-                    // Account details
-                    Group {
-                        InfoRow(label: "Status", value: identity.status ?? "Unknown")
-                        InfoRow(label: "Country", value: identity.country ?? "Unknown")
-                        InfoRow(label: "Locale", value: identity.locale ?? "Unknown")
-                        InfoRow(label: "Created", value: formatDate(identity.dateCreated))
+                    InfoRow(label: "Status", value: identity.status ?? "Unknown")
+                    InfoRow(label: "Country", value: identity.country ?? "Unknown")
+                    InfoRow(label: "Locale", value: identity.locale ?? "Unknown")
+                    
+                    if let dateCreated = identity.dateCreated {
+                        InfoRow(label: "Created", value: formatDate(dateCreated))
                     }
                 }
                 .padding()
-            } label: {
-                Text("Account Information")
             }
-            
-            // Copy all button
-            Button(action: copyAllToClipboard) {
-                HStack {
-                    Image(systemName: "doc.on.doc")
-                    Text("Copy All IDs")
-                }
-            }
-            .buttonStyle(.bordered)
         }
     }
     
-    private func formatDate(_ dateString: String?) -> String {
-        guard let dateString = dateString else { return "Unknown" }
-        // Simple formatting - could use DateFormatter for more complex formatting
-        return dateString.replacingOccurrences(of: "T", with: " ")
-                        .replacingOccurrences(of: "Z", with: "")
-                        .prefix(19)
-                        .description
-    }
-    
-    private func copyAllToClipboard() {
-        let text = """
-        EA ID: \(identity.eaId)
-        Nucleus ID: \(identity.pidId)
-        Persona ID: \(identity.personaId)
-        """
+    private func formatDate(_ dateString: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         
-        #if os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        #endif
+        if let date = formatter.date(from: dateString) {
+            let displayFormatter = DateFormatter()
+            displayFormatter.dateStyle = .medium
+            displayFormatter.timeStyle = .short
+            return displayFormatter.string(from: date)
+        }
+        return dateString
     }
 }
 
@@ -265,7 +211,6 @@ struct InfoRow: View {
     let label: String
     let value: String
     var copyable: Bool = false
-    var highlight: Bool = false
     
     @State private var copied = false
     
@@ -276,8 +221,7 @@ struct InfoRow: View {
                 .frame(width: 150, alignment: .leading)
             
             Text(value)
-                .fontWeight(highlight ? .semibold : .regular)
-                .foregroundColor(highlight ? .primary : .secondary)
+                .fontWeight(.medium)
                 .textSelection(.enabled)
             
             Spacer()
@@ -286,7 +230,6 @@ struct InfoRow: View {
                 Button(action: copyToClipboard) {
                     Image(systemName: copied ? "checkmark" : "doc.on.doc")
                         .foregroundColor(copied ? .green : .blue)
-                        .frame(width: 20)
                 }
                 .buttonStyle(.plain)
                 .help("Copy to clipboard")
@@ -310,19 +253,14 @@ struct InfoRow: View {
 // MARK: - Loading View
 
 struct LoadingView: View {
-    @State private var dots = ""
-    let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+    var statusMessage: String?
     
     var body: some View {
         VStack(spacing: 16) {
             ProgressView()
                 .scaleEffect(1.5)
-            
-            Text("Fetching identity\(dots)")
+            Text(statusMessage ?? "Authenticating with EA...")
                 .foregroundColor(.secondary)
-                .onReceive(timer) { _ in
-                    dots = dots.count >= 3 ? "" : dots + "."
-                }
         }
         .padding(40)
     }
@@ -340,20 +278,18 @@ struct ErrorView: View {
                 .font(.system(size: 40))
                 .foregroundColor(.orange)
             
-            Text("Error")
+            Text("Authentication Failed")
                 .font(.headline)
             
             Text(message)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 350)
+                .frame(maxWidth: 300)
             
-            HStack(spacing: 12) {
-                Button("Retry") {
-                    retryAction()
-                }
-                .buttonStyle(.borderedProminent)
+            Button("Try Again") {
+                retryAction()
             }
+            .buttonStyle(.borderedProminent)
         }
         .padding()
     }
@@ -366,112 +302,136 @@ class IdentityViewModel: ObservableObject {
     @Published var identity: EAIdentity?
     @Published var isLoading = false
     @Published var errorMessage: String?
+    @Published var statusMessage: String?
     @Published var manualToken = ""
     
-    private let client = EAClient.shared
-    
-    var isAuthenticated: Bool {
-        client.isAuthenticated
-    }
+    private var api: EAIdentityAPI?
     
     init() {
-        // Auto-fetch if already authenticated
-        if isAuthenticated {
-            fetchIdentity()
+        // Try to use cached credentials on launch
+        if let cachedAPI = EAIdentityAPI.fromCache() {
+            self.api = cachedAPI
+            refresh()
         }
     }
     
-    func authenticateWithWeb() {
+    /// Login using web-based authentication
+    func login() {
+        #if os(macOS)
+        guard let window = NSApplication.shared.keyWindow else {
+            errorMessage = "No window available"
+            return
+        }
+        
         isLoading = true
         errorMessage = nil
+        statusMessage = "Opening EA login..."
         
         Task {
             do {
-                #if os(macOS)
-                try await client.authenticate()
-                #endif
-                await fetchIdentityAsync()
-            } catch let error as EAAuthError {
-                self.errorMessage = error.localizedDescription
+                let webAuth = EAWebAuthenticator()
+                statusMessage = "Waiting for login..."
+                let token = try await webAuth.authenticate(from: window)
+                
+                statusMessage = "Token captured! Fetching identity..."
+                print("[ExampleApp] Token captured: \(String(token.prefix(20)))...")
+                
+                // Create API with captured token
+                self.api = EAIdentityAPI(accessToken: token)
+                
+                // Fetch identity
+                let identity = try await self.api!.getFullIdentity()
+                self.identity = identity
                 self.isLoading = false
+                self.statusMessage = nil
+            } catch let error as EAWebAuthenticator.WebAuthError {
+                if case .cancelled = error {
+                    // User cancelled, just reset state
+                    self.isLoading = false
+                    self.statusMessage = nil
+                } else {
+                    self.errorMessage = error.localizedDescription
+                    self.isLoading = false
+                    self.statusMessage = nil
+                }
             } catch {
                 self.errorMessage = error.localizedDescription
                 self.isLoading = false
+                self.statusMessage = nil
             }
         }
+        #else
+        errorMessage = "Web authentication not available on this platform"
+        #endif
     }
     
-    func authenticateWithCredentials(email: String, password: String) {
-        isLoading = true
-        errorMessage = nil
-        
-        Task {
-            do {
-                try await client.authenticate(email: email, password: password)
-                await fetchIdentityAsync()
-            } catch let error as EAAuthError {
-                self.errorMessage = error.localizedDescription
-                self.isLoading = false
-            } catch {
-                self.errorMessage = error.localizedDescription
-                self.isLoading = false
-            }
-        }
-    }
-    
+    /// Use a manually entered token
     func useManualToken() {
         guard !manualToken.isEmpty else { return }
         
         isLoading = true
         errorMessage = nil
         
-        // Create a new API instance with the manual token
-        let api = EAIdentityAPI(accessToken: manualToken)
+        api = EAIdentityAPI(accessToken: manualToken)
+        
+        Task {
+            do {
+                let identity = try await api!.getFullIdentity()
+                self.identity = identity
+                
+                // Save the token for future use
+                let storage = EATokenStorage()
+                let credentials = EACredentials(
+                    accessToken: manualToken,
+                    refreshToken: nil,
+                    expiresAt: Date().addingTimeInterval(3600),
+                    userId: identity.pidId
+                )
+                try storage.saveCredentials(credentials)
+                
+                self.manualToken = ""
+                self.isLoading = false
+            } catch {
+                self.errorMessage = error.localizedDescription
+                self.isLoading = false
+            }
+        }
+    }
+    
+    /// Refresh identity with current token
+    func refresh() {
+        guard let api = api else {
+            login()
+            return
+        }
+        
+        isLoading = true
+        errorMessage = nil
         
         Task {
             do {
                 let identity = try await api.getFullIdentity()
                 self.identity = identity
-                self.manualToken = ""
-            } catch let error as EAIdentityError {
-                self.errorMessage = error.localizedDescription
+                self.isLoading = false
+            } catch EAIdentityError.invalidToken {
+                // Token expired, need to re-authenticate
+                self.api = nil
+                self.identity = nil
+                self.errorMessage = "Session expired. Please sign in again."
+                self.isLoading = false
             } catch {
                 self.errorMessage = error.localizedDescription
+                self.isLoading = false
             }
-            self.isLoading = false
         }
     }
     
-    func fetchIdentity() {
-        isLoading = true
-        errorMessage = nil
-        
-        Task {
-            await fetchIdentityAsync()
-        }
-    }
-    
-    private func fetchIdentityAsync() async {
-        do {
-            #if os(macOS)
-            let identity = try await client.getIdentity(anchor: NSApplication.shared.keyWindow)
-            #else
-            let identity = try await client.getIdentity()
-            #endif
-            self.identity = identity
-        } catch let error as EAIdentityError {
-            self.errorMessage = error.localizedDescription
-        } catch let error as EAAuthError {
-            self.errorMessage = error.localizedDescription
-        } catch {
-            self.errorMessage = error.localizedDescription
-        }
-        
-        self.isLoading = false
-    }
-    
+    /// Logout and clear stored credentials
     func logout() {
-        client.logout()
+        let storage = EATokenStorage()
+        storage.clearCredentials()
+        
+        api = nil
         identity = nil
         errorMessage = nil
     }
