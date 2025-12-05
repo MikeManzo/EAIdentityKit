@@ -295,6 +295,14 @@ public final class EAIdentityAPI: @unchecked Sendable {
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 print("[EAIdentityAPI] Parsed JSON keys: \(json.keys)")
                 
+                // Handle {"personas": {"personaUri": ["/pids/xxx/personas/yyy"]}} format
+                if let personasWrapper = json["personas"] as? [String: Any],
+                   let personaUris = personasWrapper["personaUri"] as? [String],
+                   let firstUri = personaUris.first {
+                    print("[EAIdentityAPI] Found personaUri, fetching details: \(firstUri)")
+                    return try await fetchPersonaFromUri(firstUri, userId: pidId)
+                }
+                
                 // Handle {"personas": {"persona": [...]}} format
                 if let personasWrapper = json["personas"] as? [String: Any],
                    let personaArray = personasWrapper["persona"] as? [[String: Any]],
@@ -337,6 +345,68 @@ public final class EAIdentityAPI: @unchecked Sendable {
         } catch {
             throw EAIdentityError.networkError(error.localizedDescription)
         }
+    }
+    
+    /// Fetch persona details from a persona URI
+    private func fetchPersonaFromUri(_ uri: String, userId: String) async throws -> PersonaInfo {
+        // Extract personaId from URI like "/pids/2312665732/personas/229890242"
+        let components = uri.split(separator: "/")
+        guard let personaIdIndex = components.firstIndex(of: "personas"),
+              personaIdIndex + 1 < components.count else {
+            throw EAIdentityError.decodingError("Invalid persona URI format")
+        }
+        let personaId = String(components[personaIdIndex + 1])
+        
+        // Fetch full persona details from the gateway
+        let personaURL = "https://gateway.ea.com/proxy/identity\(uri)"
+        guard let url = URL(string: personaURL) else {
+            throw EAIdentityError.invalidURL
+        }
+        
+        print("[EAIdentityAPI] Fetching persona details from: \(personaURL)")
+        
+        let request = createRequest(url: url)
+        let (data, response) = try await session.data(for: request)
+        try handleHTTPResponse(response, data: data)
+        
+        if let jsonString = String(data: data, encoding: .utf8) {
+            print("[EAIdentityAPI] Persona details response: \(jsonString)")
+        }
+        
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            // Handle {"persona": {...}} wrapper
+            let personaData = json["persona"] as? [String: Any] ?? json
+            
+            // Extract displayName/EAID
+            let displayName = personaData["displayName"] as? String
+                ?? personaData["name"] as? String
+                ?? personaData["eaId"] as? String
+                ?? personaData["EAID"] as? String
+                ?? userId
+            
+            // Extract personaId (might be in response too)
+            let finalPersonaId: String
+            if let intId = personaData["personaId"] as? Int {
+                finalPersonaId = String(intId)
+            } else if let stringId = personaData["personaId"] as? String {
+                finalPersonaId = stringId
+            } else {
+                finalPersonaId = personaId // Use the one from URI
+            }
+            
+            return PersonaInfo(
+                userId: userId,
+                personaId: finalPersonaId,
+                eaId: displayName
+            )
+        }
+        
+        // If we can't get full details, return what we have from the URI
+        return PersonaInfo(
+            userId: userId,
+            personaId: personaId,
+            eaId: userId
+        )
     }
     
     /// Parse persona JSON into PersonaInfo
