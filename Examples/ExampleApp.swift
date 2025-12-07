@@ -118,6 +118,17 @@ struct WelcomeView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             
+            // Extraction delay setting
+            HStack {
+                Text("Extraction Delay:")
+                Slider(value: $viewModel.extractionDelay, in: 1...15, step: 1)
+                    .frame(width: 150)
+                Text("\(Int(viewModel.extractionDelay))s")
+                    .frame(width: 30)
+            }
+            .font(.caption)
+            .foregroundColor(.secondary)
+            
             Divider()
                 .frame(width: 300)
             
@@ -304,6 +315,7 @@ class IdentityViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var statusMessage: String?
     @Published var manualToken = ""
+    @Published var extractionDelay: Double = 5.0
     
     private var api: EAIdentityAPI?
     
@@ -330,6 +342,8 @@ class IdentityViewModel: ObservableObject {
         Task {
             do {
                 let webAuth = EAWebAuthenticator()
+                webAuth.extractionDelay = extractionDelay
+                
                 statusMessage = "Waiting for login..."
                 let token = try await webAuth.authenticate(from: window)
                 

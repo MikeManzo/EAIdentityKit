@@ -31,7 +31,7 @@ Add the following to your `Package.swift` file:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/MikeManzo/EAIdentityKit.git", from: "1.0.0")
+    .package(url: "https://github.com/yourusername/EAIdentityKit.git", from: "1.0.0")
 ]
 ```
 
@@ -59,6 +59,22 @@ let token = try await webAuth.authenticate(from: viewController)
 let client = EAClient()
 let token = try await client.authenticateWithWeb(from: window)
 let identity = try await client.getIdentity()
+```
+
+#### Configurable Timing
+
+The web authenticator has configurable delays for token extraction:
+
+```swift
+let webAuth = EAWebAuthenticator()
+
+// Time to wait after account page loads before extracting token (default: 5 seconds)
+webAuth.extractionDelay = 7.0
+
+// Time to wait after login before redirecting to account page (default: 2 seconds)
+webAuth.redirectDelay = 3.0
+
+let token = try await webAuth.authenticate(from: window)
 ```
 
 ### Method 2: Manual Token Entry
@@ -236,11 +252,13 @@ Lower-level API client for direct API access.
 
 Web-based authenticator that captures tokens from EA's login flow.
 
-| Method | Description |
-|--------|-------------|
+| Method/Property | Description |
+|-----------------|-------------|
 | `authenticate(from:)` | Present login and capture token |
 | `present(from:)` | Present login (delegate-based) |
 | `dismiss()` | Dismiss the login view |
+| `extractionDelay` | Seconds to wait before token extraction (default: 5.0) |
+| `redirectDelay` | Seconds to wait before redirecting to account page (default: 2.0) |
 
 ### EAAuthenticator
 
